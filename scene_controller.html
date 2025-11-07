@@ -74,7 +74,17 @@
       <button class="btn" id="btnSoundOff" type="button">Audio OFF</button>
       <span id="sndStatus" class="tiny"></span>
     </div>
-    <p class="tiny">Nota: per policy del browser serve un tap/click sull’overlay la prima volta per sbloccare l’audio.</p>
+    <p class="tiny">Nota: in browser standard serve un tap sull’overlay la prima volta per sbloccare l’audio.</p>
+  </section>
+
+  <section class="card">
+    <h2>Forza audio (Streamlabs / OBS)</h2>
+    <div class="row">
+      <button class="btn btn-ok" id="btnForceOn"  type="button">Forza audio ON</button>
+      <button class="btn btn-danger" id="btnForceOff" type="button">Forza audio OFF</button>
+      <span id="forceStatus" class="tiny"></span>
+    </div>
+    <p class="tiny">Se attivo, l’overlay tenterà di avviare i video con audio subito (utile in Browser Source).</p>
   </section>
 
   <section class="card">
@@ -127,16 +137,26 @@ const firebaseConfig = {
   document.getElementById('btnScan').addEventListener('click', scanRepo);
   document.getElementById('btnHide').addEventListener('click', hideSlide);
   document.getElementById('btnSaveOpacity').addEventListener('click', saveOpacity);
+
   document.getElementById('btnSoundOn').addEventListener('click', async ()=>{
     await set(dbRef(db, '/ghslides/sound'), true);
-    document.getElementById('sndStatus').textContent = 'Audio: ON (richiede tap sull’overlay la prima volta)';
+    document.getElementById('sndStatus').textContent = 'Audio: ON (in browser standard richiede tap sull’overlay la prima volta)';
   });
   document.getElementById('btnSoundOff').addEventListener('click', async ()=>{
     await set(dbRef(db, '/ghslides/sound'), false);
     document.getElementById('sndStatus').textContent = 'Audio: OFF';
   });
 
-  // Live feedback (mostra l’elemento attualmente attivo)
+  document.getElementById('btnForceOn').addEventListener('click', async ()=>{
+    await set(dbRef(db, '/ghslides/forceAudio'), true);
+    document.getElementById('forceStatus').textContent = 'Forza audio: ON';
+  });
+  document.getElementById('btnForceOff').addEventListener('click', async ()=>{
+    await set(dbRef(db, '/ghslides/forceAudio'), false);
+    document.getElementById('forceStatus').textContent = 'Forza audio: OFF';
+  });
+
+  // Feedback: cosa è attivo
   onValue(dbRef(db, '/ghslides/current'), snap => {
     const v = snap.val();
     if (v && v.url) {
@@ -176,7 +196,6 @@ const firebaseConfig = {
 
       if(!files.length){ grid.innerHTML=''; listStatus.textContent='Nessun file supportato trovato.'; scanStatus.textContent=''; return; }
 
-      // Normalizza: preferisci x.download_url, fallback raw
       const normalized = files.map(f=>{
         const url = f.download_url || toRaw(owner, repo, path, f.name);
         const lower = f.name.toLowerCase();
