@@ -16,10 +16,21 @@
   }
   .visible{ opacity:var(--op,1); }
   #diag{position:fixed;top:8px;left:8px;padding:6px 10px;background:rgba(0,0,0,.45);color:#fff;font:12px system-ui;border-radius:8px;pointer-events:none}
+
+  /* Unmute hint */
+  .unmute-hint{
+    position:fixed; bottom:6%; left:50%; transform:translateX(-50%);
+    padding:10px 14px; border-radius:999px;
+    background:rgba(0,0,0,.6); color:#fff; font:14px/1 system-ui;
+    pointer-events:auto; cursor:pointer; user-select:none;
+    box-shadow:0 6px 20px rgba(0,0,0,.35);
+  }
+  .unmute-hint.hidden{ display:none; }
 </style>
 </head>
 <body>
   <div id="diag">state: <span id="dState">idle</span> · opacity: <span id="dOpacity">1.00</span></div>
+  <button id="unmuteBtn" class="unmute-hint hidden">🔊 Tocca per attivare l’audio</button>
   <div class="stage">
     <div class="frame" id="holder"></div>
   </div>
@@ -29,7 +40,7 @@
     import { getDatabase, ref as dbRef, onValue } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-database.js";
 
     /* ===== STESSO PROGETTO DEL CONTROLLER ===== */
- const firebaseConfig = {
+const firebaseConfig = {
   apiKey: "AIzaSyBkce58GlbHRRmHSNyGQyDiqmxuuNll2Ys",
   authDomain: "scene1-45a13.firebaseapp.com",
   databaseURL: "https://scene1-45a13-default-rtdb.europe-west1.firebasedatabase.app",
@@ -44,13 +55,22 @@
     const holder   = document.getElementById('holder');
     const dState   = document.getElementById('dState');
     const dOpacity = document.getElementById('dOpacity');
+    const unmuteBtn = document.getElementById('unmuteBtn');
 
     let globalOpacity = 1;
+    let wantAudio = false;   // preferenza dal controller
+    let lastVideo = null;    // riferimento al video attivo
+
     onValue(dbRef(db, '/ghslides/opacity'), snap => {
       const v = Number(snap.val());
       globalOpacity = isFinite(v) ? Math.min(1, Math.max(0, v)) : 1;
       document.documentElement.style.setProperty('--op', String(globalOpacity));
       dOpacity.textContent = globalOpacity.toFixed(2);
+    });
+
+    onValue(dbRef(db, '/ghslides/sound'), snap => {
+      wantAudio = !!snap.val();
+      applyAudioPreference();
     });
 
     onValue(dbRef(db, '/ghslides/current'), snap => {
@@ -65,7 +85,9 @@
     });
 
     function clearMedia(){
+      lastVideo = null;
       while(holder.firstChild) holder.removeChild(holder.firstChild);
+      unmuteBtn.classList.add('hidden');
     }
 
     function showMedia({ url, name, kind, nonce }){
@@ -76,12 +98,18 @@
         const vid = document.createElement('video');
         vid.className = 'media';
         vid.src = bust;
-        vid.muted = true; vid.autoplay = true; vid.loop = true; vid.playsInline = true;
+        vid.playsInline = true;       // iOS
+        vid.autoplay   = true;
+        vid.loop       = true;
+        vid.muted      = true;        // autoplay compatibile
         vid.setAttribute('crossorigin','anonymous');
-        vid.oncanplay = ()=> vid.classList.add('visible');
+        vid.oncanplay = ()=>{
+          vid.classList.add('visible');
+          lastVideo = vid;
+          applyAudioPreference();     // mostra hint se necessario
+        };
         vid.onerror = ()=> dState.textContent = 'error(video)';
         holder.appendChild(vid);
-        // Safari/iOS fallback: try play() after a tick
         setTimeout(()=> vid.play().catch(()=>{}), 100);
       } else {
         const img = document.createElement('img');
@@ -93,7 +121,27 @@
         holder.appendChild(img);
       }
     }
+
+    function applyAudioPreference(){
+      if (!lastVideo) return;
+      if (wantAudio){
+        if (lastVideo.muted) {
+          unmuteBtn.classList.remove('hidden'); // serve gesto
+        }
+      } else {
+        lastVideo.muted = true;
+        lastVideo.volume = 0;
+        unmuteBtn.classList.add('hidden');
+      }
+    }
+
+    unmuteBtn.addEventListener('click', ()=>{
+      if (!lastVideo) return;
+      lastVideo.muted = false;
+      lastVideo.volume = 1;
+      lastVideo.play().catch(()=>{});
+      unmuteBtn.classList.add('hidden');
+    });
   </script>
 </body>
 </html>
-
