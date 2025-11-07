@@ -17,7 +17,7 @@
   .visible{ opacity:var(--op,1); }
   #diag{position:fixed;top:8px;left:8px;padding:6px 10px;background:rgba(0,0,0,.45);color:#fff;font:12px system-ui;border-radius:8px;pointer-events:none}
 
-  /* Unmute hint */
+  /* Unmute hint (per browser standard) */
   .unmute-hint{
     position:fixed; bottom:6%; left:50%; transform:translateX(-50%);
     padding:10px 14px; border-radius:999px;
@@ -29,7 +29,7 @@
 </style>
 </head>
 <body>
-  <div id="diag">state: <span id="dState">idle</span> · opacity: <span id="dOpacity">1.00</span></div>
+  <div id="diag">state: <span id="dState">idle</span> · opacity: <span id="dOpacity">1.00</span> · forceAudio: <span id="dForce">false</span></div>
   <button id="unmuteBtn" class="unmute-hint hidden">🔊 Tocca per attivare l’audio</button>
   <div class="stage">
     <div class="frame" id="holder"></div>
@@ -55,11 +55,13 @@ const firebaseConfig = {
     const holder   = document.getElementById('holder');
     const dState   = document.getElementById('dState');
     const dOpacity = document.getElementById('dOpacity');
+    const dForce   = document.getElementById('dForce');
     const unmuteBtn = document.getElementById('unmuteBtn');
 
     let globalOpacity = 1;
-    let wantAudio = false;   // preferenza dal controller
-    let lastVideo = null;    // riferimento al video attivo
+    let wantAudio     = false;  // preferenza dal controller (browser standard)
+    let forceAudio    = false;  // Streamlabs/OBS: prova a partire con audio subito
+    let lastVideo     = null;
 
     onValue(dbRef(db, '/ghslides/opacity'), snap => {
       const v = Number(snap.val());
@@ -70,6 +72,12 @@ const firebaseConfig = {
 
     onValue(dbRef(db, '/ghslides/sound'), snap => {
       wantAudio = !!snap.val();
+      applyAudioPreference();
+    });
+
+    onValue(dbRef(db, '/ghslides/forceAudio'), snap => {
+      forceAudio = !!snap.val();
+      dForce.textContent = String(forceAudio);
       applyAudioPreference();
     });
 
@@ -98,19 +106,43 @@ const firebaseConfig = {
         const vid = document.createElement('video');
         vid.className = 'media';
         vid.src = bust;
-        vid.playsInline = true;       // iOS
+        vid.playsInline = true;
         vid.autoplay   = true;
         vid.loop       = true;
-        vid.muted      = true;        // autoplay compatibile
         vid.setAttribute('crossorigin','anonymous');
+
+        // Strategia audio:
+        // - se forceAudio=true (Streamlabs/OBS), tenta subito audio ON
+        // - altrimenti, parte muto e si usa preferenza wantAudio + hint
+        if (forceAudio){
+          vid.muted  = false;
+          vid.volume = 1;
+        } else {
+          vid.muted  = true;
+          vid.volume = 0;
+        }
+
+        let playTries = 0;
+        const tryPlay = () => {
+          vid.play().catch(() => {
+            if (++playTries < 5) setTimeout(tryPlay, 200);
+          });
+        };
+
         vid.oncanplay = ()=>{
           vid.classList.add('visible');
           lastVideo = vid;
-          applyAudioPreference();     // mostra hint se necessario
+          if (forceAudio){
+            vid.muted = false; vid.volume = 1;
+            unmuteBtn.classList.add('hidden');
+          } else {
+            applyAudioPreference(); // gestisce hint se wantAudio=true
+          }
+          tryPlay();
         };
         vid.onerror = ()=> dState.textContent = 'error(video)';
         holder.appendChild(vid);
-        setTimeout(()=> vid.play().catch(()=>{}), 100);
+        setTimeout(tryPlay, 100);
       } else {
         const img = document.createElement('img');
         img.className = 'media';
@@ -124,9 +156,17 @@ const firebaseConfig = {
 
     function applyAudioPreference(){
       if (!lastVideo) return;
+      if (forceAudio){
+        // Streamlabs/OBS: niente hint, forza audio
+        lastVideo.muted = false;
+        lastVideo.volume = 1;
+        unmuteBtn.classList.add('hidden');
+        return;
+      }
+      // Browser standard
       if (wantAudio){
         if (lastVideo.muted) {
-          unmuteBtn.classList.remove('hidden'); // serve gesto
+          unmuteBtn.classList.remove('hidden'); // serve un gesto
         }
       } else {
         lastVideo.muted = true;
@@ -145,3 +185,4 @@ const firebaseConfig = {
   </script>
 </body>
 </html>
+
