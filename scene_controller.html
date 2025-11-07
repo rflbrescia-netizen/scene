@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Slides Controller — Upload & Show/Hide (v9 + progress + retry)</title>
+<title>GitHub Slides — Controller</title>
 <style>
   :root{ --bg:#0b111a; --panel:#121826; --muted:#9fb0cc; --accent:#39d5ff; --danger:#ff5575; --ok:#78ffb3; }
   html,body{margin:0;padding:0;background:var(--bg);color:#e9eef9;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif}
@@ -13,48 +13,58 @@
   .card{background:var(--panel);border:1px solid rgba(255,255,255,.06);border-radius:12px;padding:12px}
   .card h2{margin:0 0 8px;font-size:16px}
   .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  label{font-size:12px;color:var(--muted);display:block;margin-bottom:4px}
+  input[type="text"]{padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.08);background:#0b111b;color:#e9eef9}
   .btn{padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.08);background:#0d1624;color:#e9eef9;cursor:pointer}
   .btn:hover{filter:brightness(1.08)}
   .btn-accent{background:var(--accent);color:#001018;font-weight:800}
   .btn-danger{background:var(--danger);color:#2c0009;font-weight:800}
   .btn-ok{background:var(--ok);color:#00140a;font-weight:800}
   .tiny{font-size:12px;color:var(--muted)}
-  input[type="range"]{width:200px}
-
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
   .item{display:grid;gap:8px;background:#0c1422;border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:10px}
   .thumb{width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:8px;background:#0a0f18}
   .name{font-weight:700}
-
-  /* Upload list with progress */
-  .uploads{display:grid;gap:8px}
-  .up-row{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;background:#0c1422;border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:10px}
-  .up-name{font-weight:600}
-  .up-bar{position:relative;height:10px;background:#0b111b;border:1px solid rgba(255,255,255,.08);border-radius:999px;overflow:hidden}
-  .up-fill{position:absolute;inset:0 100% 0 0;background:var(--accent)}
-  .up-meta{font-size:12px;color:var(--muted)}
-  .up-ok{color:var(--ok);font-weight:700}
-  .up-err{color:var(--danger);font-weight:700}
-
-  @media (max-width: 720px){
-    .btn{padding:12px 14px}
-    input[type="range"]{width:160px}
-  }
+  .badge{font-size:11px;padding:2px 6px;border-radius:6px;background:#0b111b;color:#9fb0cc;width:max-content}
+  @media (max-width: 720px){ .btn{padding:12px 14px} input[type="text"]{width:100%} .row input{flex:1} }
 </style>
 </head>
 <body>
-<header><h1>Slides Controller — Upload & Show/Hide</h1></header>
+<header><h1>GitHub Slides — Controller</h1></header>
 
 <div class="wrap">
+
   <section class="card">
-    <h2>Carica immagini</h2>
+    <h2>Sorgente GitHub</h2>
     <div class="row">
-      <input type="file" id="fileInput" accept=".png,.jpg,.jpeg,.webp" multiple />
-      <button class="btn btn-accent" id="btnUpload" type="button">Upload</button>
-      <span id="upStatus" class="tiny"></span>
+      <div>
+        <label>Owner</label>
+        <input type="text" id="ghOwner" value="rflbrescia-netizen">
+      </div>
+      <div>
+        <label>Repository</label>
+        <input type="text" id="ghRepo" value="roster">
+      </div>
+      <div>
+        <label>Cartella (opz.)</label>
+        <input type="text" id="ghPath" value="" placeholder="es. slides">
+      </div>
+      <div style="min-width:260px">
+        <label>Token GitHub (opz., per repo private o rate limit)</label>
+        <input type="text" id="ghToken" placeholder="ghp_...">
+      </div>
+      <button class="btn btn-accent" id="btnScan" type="button">Scansiona repo</button>
+      <span id="scanStatus" class="tiny"></span>
     </div>
-    <div class="uploads" id="uploads"></div>
-    <p class="tiny">Limiti (modificabili nel codice): max 20 file / max 25 MB per file.</p>
+    <p class="tiny">Supporto: immagini <code>.jpg .jpeg .png .webp .gif</code> e video <code>.mp4 .webm</code>. I file devono essere pubblici nel repo.</p>
+  </section>
+
+  <section class="card">
+    <h2>Comandi Overlay</h2>
+    <div class="row">
+      <button class="btn" id="btnHide" type="button">Nascondi</button>
+      <span class="tiny">nasconde la slide corrente</span>
+    </div>
   </section>
 
   <section class="card">
@@ -68,253 +78,146 @@
   </section>
 
   <section class="card">
-    <h2>Galleria</h2>
+    <h2>Galleria (GitHub)</h2>
     <div id="grid" class="grid"></div>
-    <p class="tiny" id="listStatus"></p>
+    <p id="listStatus" class="tiny"></p>
   </section>
+
 </div>
 
 <!-- Firebase v9 (modular) via CDN -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js";
-  import { getDatabase, ref as dbRef, onValue, set, push, remove } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-database.js";
-  import { getStorage, ref as stRef, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-storage.js";
+  import { getDatabase, ref as dbRef, set, onValue } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-database.js";
 
-  /* === Configura il TUO progetto === */
- const firebaseConfig = {
-  apiKey: "AIzaSyBkce58GlbHRRmHSNyGQyDiqmxuuNll2Ys",
-  authDomain: "scene1-45a13.firebaseapp.com",
-  databaseURL: "https://scene1-45a13-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: "scene1-45a13",
-  storageBucket: "scene1-45a13.firebasestorage.app",
-  messagingSenderId: "15156197967",
-  appId: "1:15156197967:web:2b9caac05000641352083a"
-};
-
+  /* ===== CONFIGURA QUI IL TUO PROGETTO (Realtime DB) =====
+     Usa la URL REGIONALE (es: europe-west1.firebasedatabase.app) */
+  const firebaseConfig = {
+    apiKey: "REPLACE_ME",
+    authDomain: "REPLACE_ME.firebaseapp.com",
+    projectId: "REPLACE_ME",
+    storageBucket: "REPLACE_ME.appspot.com",
+    messagingSenderId: "REPLACE_ME",
+    appId: "REPLACE_ME",
+    databaseURL: "https://REPLACE_ME-default-rtdb.europe-west1.firebasedatabase.app"
+  };
   const app = initializeApp(firebaseConfig);
   const db  = getDatabase(app);
-  const st  = getStorage(app);
 
-  // DOM
+  // UI refs
   const $ = s => document.querySelector(s);
   const grid = $('#grid');
-  const upStatus = $('#upStatus');
   const listStatus = $('#listStatus');
+  const scanStatus = $('#scanStatus');
   const opStatus = $('#opStatus');
-  const uploadsEl = $('#uploads');
-  const range = $('#opacityRange');
-  const rangeVal = $('#opacityVal');
+  const range = $('#opacityRange'); const rangeVal = $('#opacityVal');
+  range.addEventListener('input', ()=> rangeVal.textContent = range.value + '%');
 
-  range.addEventListener('input', () => rangeVal.textContent = range.value + '%');
-  $('#btnSaveOpacity').addEventListener('click', saveOpacity);
-  $('#btnUpload').addEventListener('click', uploadFiles);
+  // Bind
+  document.getElementById('btnScan').addEventListener('click', scanRepo);
+  document.getElementById('btnHide').addEventListener('click', hideSlide);
+  document.getElementById('btnSaveOpacity').addEventListener('click', saveOpacity);
 
-  // Live lista items
-  let items = {};
-  onValue(dbRef(db, '/slides/items'), (snap) => {
-    items = snap.val() || {};
-    renderList(items);
+  // Live feedback (mostra l’elemento attualmente attivo)
+  onValue(dbRef(db, '/ghslides/current'), snap => {
+    const v = snap.val();
+    if (v && v.url) {
+      scanStatus.textContent = 'Mostrando: ' + (v.name || v.url);
+    } else {
+      scanStatus.textContent = 'Nessuna slide attiva.';
+    }
   });
 
-  // ==== LIMITI (puoi modificarli) ====
-  const MAX_FILES = 20;
-  const MAX_SIZE_MB = 25;
-  const MAX_RETRIES = 3;
+  // Scansiona repo GitHub e popola la galleria
+  async function scanRepo(){
+    const owner = $('#ghOwner').value.trim();
+    const repo  = $('#ghRepo').value.trim();
+    const path  = $('#ghPath').value.trim().replace(/^\/+|\/+$/g,'');
+    const token = $('#ghToken').value.trim();
+    if(!owner || !repo){ alert('Inserisci owner e repo.'); return; }
 
-  // Utils upload UI
-  function addUploadRow(name){
-    const row = document.createElement('div');
-    row.className = 'up-row';
-    row.innerHTML = `
-      <div>
-        <div class="up-name">${name}</div>
-        <div class="up-bar"><div class="up-fill"></div></div>
-        <div class="up-meta tiny">In attesa…</div>
-      </div>
-      <div class="up-meta tiny"></div>
-    `;
-    uploadsEl.prepend(row);
-    return {
-      row,
-      fill: row.querySelector('.up-fill'),
-      meta: row.querySelector('.up-meta'),
-      right: row.lastElementChild
-    };
-  }
-  function setUploadProgress(ui, pct){
-    ui.fill.style.inset = `0 ${100-pct}% 0 0`;
-    ui.meta.textContent = `Caricamento: ${pct}%`;
-  }
-  function setUploadDone(ui, url){
-    ui.fill.style.inset = `0 0 0 0`;
-    ui.meta.innerHTML = `<span class="up-ok">Completato</span>`;
-    ui.right.innerHTML = `<a href="${url}" target="_blank" class="tiny">Apri</a>`;
-  }
-  function setUploadError(ui, msg){
-    ui.meta.innerHTML = `<span class="up-err">Errore:</span> ${msg}`;
-  }
+    const base = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents`;
+    const api  = path ? `${base}/${encodeURIComponent(path)}` : base;
 
-  // Carica file multipli con progress + retry
-  async function uploadFiles(){
-    const input = document.getElementById('fileInput');
-    const files = Array.from(input.files || []);
-    if(!files.length){ upStatus.textContent = 'Seleziona uno o più file.'; return; }
+    scanStatus.textContent = 'Scansione in corso…';
+    const headers = { 'Accept': 'application/vnd.github+json' };
+    if(token) headers['Authorization'] = 'Bearer ' + token;
 
-    // Limiti
-    if (files.length > MAX_FILES){
-      upStatus.textContent = `Max ${MAX_FILES} file per upload.`;
-      return;
-    }
-    const tooBig = files.filter(f => f.size > MAX_SIZE_MB * 1024 * 1024);
-    if (tooBig.length){
-      upStatus.textContent = `File troppo grandi (> ${MAX_SIZE_MB} MB): ${tooBig.map(f=>f.name).join(', ')}`;
-      return;
-    }
-
-    upStatus.textContent = `Upload in corso… (0/${files.length})`;
-    let done = 0;
-
-    for (const f of files){
-      const ui = addUploadRow(f.name);
-
-      const cleanName = f.name.replace(/\s+/g,'_');
-      const path = `slides/${Date.now()}_${Math.random().toString(36).slice(2,6)}_${cleanName}`;
-      const ref = stRef(st, path);
-
-      try{
-        const snap = await uploadWithRetry(ref, f, ui, MAX_RETRIES);
-        const url = await getDownloadURL(snap.ref);
-
-        // salva su DB
-        const key = push(dbRef(db, '/slides/items')).key;
-        await set(dbRef(db, `/slides/items/${key}`), {
-          id: key, name: f.name, path, url, createdAt: Date.now()
-        });
-
-        setUploadDone(ui, url);
-        done++;
-        upStatus.textContent = `Upload in corso… (${done}/${files.length})`;
-      }catch(e){
-        console.error('Upload error', e);
-        setUploadError(ui, e?.message || String(e));
+    try{
+      const res = await fetch(api, { cache:'no-store', headers });
+      if(!res.ok){
+        const t = await res.text();
+        throw new Error(`GitHub HTTP ${res.status}: ${t.slice(0,160)}`);
       }
+      const items = await res.json();
+      const mediaExt = ['.jpg','.jpeg','.png','.webp','.gif','.mp4','.webm'];
+      const files = (Array.isArray(items) ? items : []).filter(x=>{
+        const name = (x?.name || '').toLowerCase();
+        return x?.type === 'file' && mediaExt.some(ext => name.endsWith(ext));
+      });
+
+      if(!files.length){ grid.innerHTML=''; listStatus.textContent='Nessun file supportato trovato.'; scanStatus.textContent=''; return; }
+
+      // Normalizza: preferisci x.download_url, fallback raw
+      const normalized = files.map(f=>{
+        const url = f.download_url || toRaw(owner, repo, path, f.name);
+        const lower = f.name.toLowerCase();
+        const kind = (lower.endsWith('.mp4') || lower.endsWith('.webm')) ? 'video' : 'image';
+        return { id: f.sha || f.path || f.name, name: f.name, url, kind };
+      });
+      renderList(normalized);
+      listStatus.textContent = `${normalized.length} file.`;
+      scanStatus.textContent = 'Scansione OK.';
+    }catch(e){
+      console.error(e);
+      scanStatus.textContent = 'Errore: ' + (e?.message || e);
+      alert('Errore scansione: ' + (e?.message || e));
     }
-
-    input.value = '';
-    upStatus.textContent = 'Upload terminato.';
   }
 
-  // Upload con retry ed exponential backoff
-  function uploadWithRetry(ref, file, ui, maxRetries=3){
-    let attempt = 0;
-
-    return new Promise((resolve, reject) => {
-      const start = () => {
-        attempt++;
-        ui.meta.textContent = `Inizio upload (tentativo ${attempt}/${maxRetries})…`;
-
-        const task = uploadBytesResumable(ref, file);
-
-        let lastProgressTs = Date.now();
-        const watchdog = setInterval(()=>{
-          // se per 60s non avanza, rifacciamo (solo se non superato max tentativi)
-          if (Date.now() - lastProgressTs > 60000){
-            console.warn('Timeout avanzamento upload, ri-provo…', ref.fullPath);
-            clearInterval(watchdog);
-            task.cancel(); // causerà "storage/canceled"
-          }
-        }, 5000);
-
-        task.on('state_changed',
-          (snap)=>{
-            if (snap.totalBytes){
-              const pct = Math.floor((snap.bytesTransferred / snap.totalBytes) * 100);
-              lastProgressTs = Date.now();
-              setUploadProgress(ui, pct);
-            }
-          },
-          async (err)=>{
-            clearInterval(watchdog);
-            // Se tentativi rimasti e errore transitorio → retry
-            const transientCodes = new Set([
-              'storage/retry-limit-exceeded',
-              'storage/unknown',
-              'storage/canceled',
-              'storage/quota-exceeded',
-              'storage/unauthorized',
-              'storage/network-request-failed'
-            ]);
-            if (attempt < maxRetries && transientCodes.has(err?.code || 'storage/unknown')){
-              const delay = 500 * Math.pow(2, attempt-1); // backoff 0.5s, 1s, 2s…
-              ui.meta.textContent = `Errore transitorio (${err.code||'unknown'}). Retry tra ${delay} ms…`;
-              setTimeout(start, delay);
-            } else {
-              reject(err);
-            }
-          },
-          ()=>{
-            clearInterval(watchdog);
-            resolve(task.snapshot);
-          }
-        );
-      };
-
-      start();
-    });
-  }
-
-  // Mostra lista
-  function renderList(map){
+  function renderList(items){
     grid.innerHTML = '';
-    const ids = Object.keys(map);
-    if (!ids.length){ listStatus.textContent = 'Nessuna immagine caricata.'; return; }
-    listStatus.textContent = `${ids.length} immagini.`;
-    ids.sort((a,b)=> map[b].createdAt - map[a].createdAt);
-    ids.forEach(id => {
-      const it = map[id];
+    items.forEach(it=>{
       const card = document.createElement('div');
       card.className = 'item';
+      const preview = (it.kind === 'image')
+        ? `<img class="thumb" src="${it.url}" alt="${it.name}" loading="lazy">`
+        : `<video class="thumb" src="${it.url}" muted playsinline></video>`;
       card.innerHTML = `
-        <img class="thumb" src="${it.url}" alt="${it.name}">
+        ${preview}
         <div class="name">${it.name}</div>
+        <span class="badge">${it.kind.toUpperCase()}</span>
         <div class="row">
-          <button class="btn btn-accent" data-act="show" data-id="${id}" type="button">Mostra</button>
-          <button class="btn" data-act="hide" data-id="${id}" type="button">Nascondi</button>
-          <button class="btn btn-danger" data-act="del"  data-id="${id}" type="button">Elimina</button>
+          <button class="btn btn-accent" type="button">Mostra</button>
+          <button class="btn" type="button">Nascondi</button>
         </div>
       `;
-      card.querySelector('[data-act="show"]').onclick = ()=> showSlide(id);
-      card.querySelector('[data-act="hide"]').onclick = hideSlide;
-      card.querySelector('[data-act="del"]').onclick  = ()=> deleteSlide(id);
+      const [btnShow, btnHide] = card.querySelectorAll('button');
+      btnShow.onclick = ()=> showSlide(it);
+      btnHide.onclick = ()=> hideSlide();
       grid.appendChild(card);
     });
   }
 
-  // Comandi overlay
-  async function showSlide(id){
-    const it = items[id]; if (!it) return;
-    await set(dbRef(db, '/slides/current'), { id, url: it.url, name: it.name, nonce: Date.now() });
+  // Comandi overlay (DB only)
+  async function showSlide(it){
+    await set(dbRef(db, '/ghslides/current'), {
+      id: it.id, url: it.url, name: it.name, kind: it.kind, nonce: Date.now()
+    });
   }
   async function hideSlide(){
-    await set(dbRef(db, '/slides/current'), null);
+    await set(dbRef(db, '/ghslides/current'), null);
   }
-  async function deleteSlide(id){
-    const it = items[id]; if (!it) return;
-    if (!confirm(`Eliminare "${it.name}"?`)) return;
-    try{
-      await deleteObject(stRef(st, it.path));
-    }catch(e){
-      console.warn('Storage delete warning:', e?.message||e);
-    }
-    await set(dbRef(db, `/slides/items/${id}`), null);
-  }
-
-  // Opacità globale (0-100) → 0..1
   async function saveOpacity(){
     const v = Math.max(0, Math.min(100, parseInt(range.value || '100',10)));
-    await set(dbRef(db, '/slides/opacity'), v/100);
+    await set(dbRef(db, '/ghslides/opacity'), v/100);
     opStatus.textContent = `Opacità impostata a ${v}%`;
-    setTimeout(()=> opStatus.textContent = '', 1500);
+    setTimeout(()=> opStatus.textContent='', 1500);
+  }
+
+  function toRaw(owner, repo, path, name){
+    const p = path ? (path.replace(/^\/+|\/+$/g,'') + '/') : '';
+    return `https://raw.githubusercontent.com/${owner}/${repo}/HEAD/${p}${name}`;
   }
 </script>
 </body>
