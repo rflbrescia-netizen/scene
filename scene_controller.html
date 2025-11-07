@@ -47,7 +47,7 @@
       </div>
       <div>
         <label>Cartella (opz.)</label>
-        <input type="text" id="ghPath" value="" placeholder="es. slides">
+        <input type="text" id="ghPath" value="" placeholder="es. slides o media/basket">
       </div>
       <div style="min-width:260px">
         <label>Token GitHub (opz., per repo private o rate limit)</label>
@@ -65,6 +65,16 @@
       <button class="btn" id="btnHide" type="button">Nascondi</button>
       <span class="tiny">nasconde la slide corrente</span>
     </div>
+  </section>
+
+  <section class="card">
+    <h2>Audio video</h2>
+    <div class="row">
+      <button class="btn" id="btnSoundOn"  type="button">Audio ON</button>
+      <button class="btn" id="btnSoundOff" type="button">Audio OFF</button>
+      <span id="sndStatus" class="tiny"></span>
+    </div>
+    <p class="tiny">Nota: per policy del browser serve un tap/click sull’overlay la prima volta per sbloccare l’audio.</p>
   </section>
 
   <section class="card">
@@ -117,6 +127,14 @@ const firebaseConfig = {
   document.getElementById('btnScan').addEventListener('click', scanRepo);
   document.getElementById('btnHide').addEventListener('click', hideSlide);
   document.getElementById('btnSaveOpacity').addEventListener('click', saveOpacity);
+  document.getElementById('btnSoundOn').addEventListener('click', async ()=>{
+    await set(dbRef(db, '/ghslides/sound'), true);
+    document.getElementById('sndStatus').textContent = 'Audio: ON (richiede tap sull’overlay la prima volta)';
+  });
+  document.getElementById('btnSoundOff').addEventListener('click', async ()=>{
+    await set(dbRef(db, '/ghslides/sound'), false);
+    document.getElementById('sndStatus').textContent = 'Audio: OFF';
+  });
 
   // Live feedback (mostra l’elemento attualmente attivo)
   onValue(dbRef(db, '/ghslides/current'), snap => {
