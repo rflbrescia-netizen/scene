@@ -100,26 +100,89 @@ db.ref('/slides/items').on('value', snap => {
   renderList(items);
 });
 
-// Carica file multipli su Storage + salva metadati su DB
+// Carica file multipli su Storage + salva metadati su DB (robusto)
 async function uploadFiles(){
-  const files = document.getElementById('fileInput').files;
+  const input = document.getElementById('fileInput');
+  const files = input.files;
   if(!files || !files.length){ upStatus.textContent = 'Seleziona uno o più file.'; return; }
-  upStatus.textContent = 'Upload in corso…';
 
+  // Controllo config più comune
+  if (!firebase.apps.length || !firebase.storage){
+    upStatus.textContent = 'Firebase non inizializzato correttamente.';
+    return;
+  }
+  const cfg = firebase.app().options;
+  if (!cfg || !cfg.storageBucket || !cfg.storageBucket.endsWith('appspot.com')){
+    upStatus.textContent = 'Attenzione: storageBucket non è *.appspot.com — correggi firebaseConfig.';
+    return;
+  }
+
+  upStatus.textContent = `Upload in corso… (0/${files.length})`;
+  const storageRef = firebase.storage().ref();
+
+  let done = 0;
   for (const f of files){
     const cleanName = f.name.replace(/\s+/g,'_');
     const path = `slides/${Date.now()}_${cleanName}`;
-    const ref = storage.ref().child(path);
-    await ref.put(f);
-    const url = await ref.getDownloadURL();
-    const key = db.ref('/slides/items').push().key;
-    await db.ref(`/slides/items/${key}`).set({
-      id: key, name: f.name, path, url, createdAt: Date.now()
+    const ref = storageRef.child(path);
+
+    // Resumable upload + progress
+    const task = ref.put(f); // compat: put() è già resumable; se usi modular v9 usa uploadBytesResumable
+    let lastPct = 0;
+    let aborted = false;
+
+    // Watchdog: se non avanza per 60s, abort
+    let lastProgressTs = Date.now();
+    const watchdog = setInterval(()=>{
+      if (Date.now() - lastProgressTs > 60000){ // 60s senza avanzare
+        aborted = true;
+        try { task.cancel && task.cancel(); } catch(_) {}
+        console.warn('Upload watchdog: annullato per timeout', path);
+      }
+    }, 5000);
+
+    await new Promise((resolve, reject)=>{
+      task.on('state_changed',
+        (snap)=>{
+          // progress
+          if (snap.totalBytes) {
+            const pct = Math.floor((snap.bytesTransferred / snap.totalBytes) * 100);
+            if (pct !== lastPct) {
+              lastPct = pct;
+              lastProgressTs = Date.now();
+              upStatus.textContent = `Upload in corso… ${pct}% (${cleanName})`;
+            }
+          }
+        },
+        (err)=>{
+          clearInterval(watchdog);
+          console.error('Upload error', err);
+          reject(err);
+        },
+        async ()=>{
+          clearInterval(watchdog);
+          if (aborted) return reject(new Error('Upload annullato per timeout'));
+          try{
+            const url = await ref.getDownloadURL();
+            const key = db.ref('/slides/items').push().key;
+            await db.ref(`/slides/items/${key}`).set({
+              id: key, name: f.name, path, url, createdAt: Date.now()
+            });
+            done++;
+            upStatus.textContent = `Upload in corso… (${done}/${files.length})`;
+            resolve();
+          }catch(e){
+            reject(e);
+          }
+        }
+      );
     });
   }
+
+  input.value = '';
   upStatus.textContent = 'Upload completato ✔';
-  document.getElementById('fileInput').value = '';
 }
+
 
 // Mostra lista
 function renderList(map){
