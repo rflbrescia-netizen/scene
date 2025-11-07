@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Slides Controller — Upload & Show/Hide</title>
+<title>Slides Controller — Upload & Show/Hide (v9 + progress + retry)</title>
 <style>
   :root{ --bg:#0b111a; --panel:#121826; --muted:#9fb0cc; --accent:#39d5ff; --danger:#ff5575; --ok:#78ffb3; }
   html,body{margin:0;padding:0;background:var(--bg);color:#e9eef9;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif}
@@ -20,10 +20,22 @@
   .btn-ok{background:var(--ok);color:#00140a;font-weight:800}
   .tiny{font-size:12px;color:var(--muted)}
   input[type="range"]{width:200px}
+
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
   .item{display:grid;gap:8px;background:#0c1422;border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:10px}
   .thumb{width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:8px;background:#0a0f18}
   .name{font-weight:700}
+
+  /* Upload list with progress */
+  .uploads{display:grid;gap:8px}
+  .up-row{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;background:#0c1422;border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:10px}
+  .up-name{font-weight:600}
+  .up-bar{position:relative;height:10px;background:#0b111b;border:1px solid rgba(255,255,255,.08);border-radius:999px;overflow:hidden}
+  .up-fill{position:absolute;inset:0 100% 0 0;background:var(--accent)}
+  .up-meta{font-size:12px;color:var(--muted)}
+  .up-ok{color:var(--ok);font-weight:700}
+  .up-err{color:var(--danger);font-weight:700}
+
   @media (max-width: 720px){
     .btn{padding:12px 14px}
     input[type="range"]{width:160px}
@@ -41,7 +53,8 @@
       <button class="btn btn-accent" id="btnUpload" type="button">Upload</button>
       <span id="upStatus" class="tiny"></span>
     </div>
-    <p class="tiny">Suggerito: PNG/JPG/WebP. Le immagini saranno mostrate a tutto schermo (fit “contain”).</p>
+    <div class="uploads" id="uploads"></div>
+    <p class="tiny">Limiti (modificabili nel codice): max 20 file / max 25 MB per file.</p>
   </section>
 
   <section class="card">
@@ -61,15 +74,14 @@
   </section>
 </div>
 
-<!-- Firebase compat SDK -->
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-storage-compat.js"></script>
-<script>
-'use strict';
+<!-- Firebase v9 (modular) via CDN -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js";
+  import { getDatabase, ref as dbRef, onValue, set, push, remove } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-database.js";
+  import { getStorage, ref as stRef, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-storage.js";
 
-// === Sostituisci con il tuo progetto (qui riuso quello degli esempi) ===
-const firebaseConfig = {
+  /* === Configura il TUO progetto === */
+ const firebaseConfig = {
   apiKey: "AIzaSyBwClPtAF4TDN5ndFUoouL0zXIYlyGdx1k",
   authDomain: "scene-75f23.firebaseapp.com",
   projectId: "scene-75f23",
@@ -77,163 +89,232 @@ const firebaseConfig = {
   messagingSenderId: "261453827889",
   appId: "1:261453827889:web:005b387590b4c52f322a10"
 };
-firebase.initializeApp(firebaseConfig);
-const db = firebase.database();
-const storage = firebase.storage();
 
-const $ = s => document.querySelector(s);
-const grid = $('#grid');
-const upStatus = $('#upStatus');
-const listStatus = $('#listStatus');
-const opStatus = $('#opStatus');
+  const app = initializeApp(firebaseConfig);
+  const db  = getDatabase(app);
+  const st  = getStorage(app);
 
-document.getElementById('btnUpload').addEventListener('click', uploadFiles);
-document.getElementById('btnSaveOpacity').addEventListener('click', saveOpacity);
-const range = document.getElementById('opacityRange');
-const rangeVal = document.getElementById('opacityVal');
-range.addEventListener('input', () => rangeVal.textContent = range.value + '%');
+  // DOM
+  const $ = s => document.querySelector(s);
+  const grid = $('#grid');
+  const upStatus = $('#upStatus');
+  const listStatus = $('#listStatus');
+  const opStatus = $('#opStatus');
+  const uploadsEl = $('#uploads');
+  const range = $('#opacityRange');
+  const rangeVal = $('#opacityVal');
 
-// Live lista items
-let items = {};
-db.ref('/slides/items').on('value', snap => {
-  items = snap.val() || {};
-  renderList(items);
-});
+  range.addEventListener('input', () => rangeVal.textContent = range.value + '%');
+  $('#btnSaveOpacity').addEventListener('click', saveOpacity);
+  $('#btnUpload').addEventListener('click', uploadFiles);
 
-// Carica file multipli su Storage + salva metadati su DB (robusto)
-async function uploadFiles(){
-  const input = document.getElementById('fileInput');
-  const files = input.files;
-  if(!files || !files.length){ upStatus.textContent = 'Seleziona uno o più file.'; return; }
+  // Live lista items
+  let items = {};
+  onValue(dbRef(db, '/slides/items'), (snap) => {
+    items = snap.val() || {};
+    renderList(items);
+  });
 
-  // Controllo config più comune
-  if (!firebase.apps.length || !firebase.storage){
-    upStatus.textContent = 'Firebase non inizializzato correttamente.';
-    return;
+  // ==== LIMITI (puoi modificarli) ====
+  const MAX_FILES = 20;
+  const MAX_SIZE_MB = 25;
+  const MAX_RETRIES = 3;
+
+  // Utils upload UI
+  function addUploadRow(name){
+    const row = document.createElement('div');
+    row.className = 'up-row';
+    row.innerHTML = `
+      <div>
+        <div class="up-name">${name}</div>
+        <div class="up-bar"><div class="up-fill"></div></div>
+        <div class="up-meta tiny">In attesa…</div>
+      </div>
+      <div class="up-meta tiny"></div>
+    `;
+    uploadsEl.prepend(row);
+    return {
+      row,
+      fill: row.querySelector('.up-fill'),
+      meta: row.querySelector('.up-meta'),
+      right: row.lastElementChild
+    };
   }
-  const cfg = firebase.app().options;
-  if (!cfg || !cfg.storageBucket || !cfg.storageBucket.endsWith('appspot.com')){
-    upStatus.textContent = 'Attenzione: storageBucket non è *.appspot.com — correggi firebaseConfig.';
-    return;
+  function setUploadProgress(ui, pct){
+    ui.fill.style.inset = `0 ${100-pct}% 0 0`;
+    ui.meta.textContent = `Caricamento: ${pct}%`;
+  }
+  function setUploadDone(ui, url){
+    ui.fill.style.inset = `0 0 0 0`;
+    ui.meta.innerHTML = `<span class="up-ok">Completato</span>`;
+    ui.right.innerHTML = `<a href="${url}" target="_blank" class="tiny">Apri</a>`;
+  }
+  function setUploadError(ui, msg){
+    ui.meta.innerHTML = `<span class="up-err">Errore:</span> ${msg}`;
   }
 
-  upStatus.textContent = `Upload in corso… (0/${files.length})`;
-  const storageRef = firebase.storage().ref();
+  // Carica file multipli con progress + retry
+  async function uploadFiles(){
+    const input = document.getElementById('fileInput');
+    const files = Array.from(input.files || []);
+    if(!files.length){ upStatus.textContent = 'Seleziona uno o più file.'; return; }
 
-  let done = 0;
-  for (const f of files){
-    const cleanName = f.name.replace(/\s+/g,'_');
-    const path = `slides/${Date.now()}_${cleanName}`;
-    const ref = storageRef.child(path);
+    // Limiti
+    if (files.length > MAX_FILES){
+      upStatus.textContent = `Max ${MAX_FILES} file per upload.`;
+      return;
+    }
+    const tooBig = files.filter(f => f.size > MAX_SIZE_MB * 1024 * 1024);
+    if (tooBig.length){
+      upStatus.textContent = `File troppo grandi (> ${MAX_SIZE_MB} MB): ${tooBig.map(f=>f.name).join(', ')}`;
+      return;
+    }
 
-    // Resumable upload + progress
-    const task = ref.put(f); // compat: put() è già resumable; se usi modular v9 usa uploadBytesResumable
-    let lastPct = 0;
-    let aborted = false;
+    upStatus.textContent = `Upload in corso… (0/${files.length})`;
+    let done = 0;
 
-    // Watchdog: se non avanza per 60s, abort
-    let lastProgressTs = Date.now();
-    const watchdog = setInterval(()=>{
-      if (Date.now() - lastProgressTs > 60000){ // 60s senza avanzare
-        aborted = true;
-        try { task.cancel && task.cancel(); } catch(_) {}
-        console.warn('Upload watchdog: annullato per timeout', path);
+    for (const f of files){
+      const ui = addUploadRow(f.name);
+
+      const cleanName = f.name.replace(/\s+/g,'_');
+      const path = `slides/${Date.now()}_${Math.random().toString(36).slice(2,6)}_${cleanName}`;
+      const ref = stRef(st, path);
+
+      try{
+        const snap = await uploadWithRetry(ref, f, ui, MAX_RETRIES);
+        const url = await getDownloadURL(snap.ref);
+
+        // salva su DB
+        const key = push(dbRef(db, '/slides/items')).key;
+        await set(dbRef(db, `/slides/items/${key}`), {
+          id: key, name: f.name, path, url, createdAt: Date.now()
+        });
+
+        setUploadDone(ui, url);
+        done++;
+        upStatus.textContent = `Upload in corso… (${done}/${files.length})`;
+      }catch(e){
+        console.error('Upload error', e);
+        setUploadError(ui, e?.message || String(e));
       }
-    }, 5000);
+    }
 
-    await new Promise((resolve, reject)=>{
-      task.on('state_changed',
-        (snap)=>{
-          // progress
-          if (snap.totalBytes) {
-            const pct = Math.floor((snap.bytesTransferred / snap.totalBytes) * 100);
-            if (pct !== lastPct) {
-              lastPct = pct;
+    input.value = '';
+    upStatus.textContent = 'Upload terminato.';
+  }
+
+  // Upload con retry ed exponential backoff
+  function uploadWithRetry(ref, file, ui, maxRetries=3){
+    let attempt = 0;
+
+    return new Promise((resolve, reject) => {
+      const start = () => {
+        attempt++;
+        ui.meta.textContent = `Inizio upload (tentativo ${attempt}/${maxRetries})…`;
+
+        const task = uploadBytesResumable(ref, file);
+
+        let lastProgressTs = Date.now();
+        const watchdog = setInterval(()=>{
+          // se per 60s non avanza, rifacciamo (solo se non superato max tentativi)
+          if (Date.now() - lastProgressTs > 60000){
+            console.warn('Timeout avanzamento upload, ri-provo…', ref.fullPath);
+            clearInterval(watchdog);
+            task.cancel(); // causerà "storage/canceled"
+          }
+        }, 5000);
+
+        task.on('state_changed',
+          (snap)=>{
+            if (snap.totalBytes){
+              const pct = Math.floor((snap.bytesTransferred / snap.totalBytes) * 100);
               lastProgressTs = Date.now();
-              upStatus.textContent = `Upload in corso… ${pct}% (${cleanName})`;
+              setUploadProgress(ui, pct);
             }
+          },
+          async (err)=>{
+            clearInterval(watchdog);
+            // Se tentativi rimasti e errore transitorio → retry
+            const transientCodes = new Set([
+              'storage/retry-limit-exceeded',
+              'storage/unknown',
+              'storage/canceled',
+              'storage/quota-exceeded',
+              'storage/unauthorized',
+              'storage/network-request-failed'
+            ]);
+            if (attempt < maxRetries && transientCodes.has(err?.code || 'storage/unknown')){
+              const delay = 500 * Math.pow(2, attempt-1); // backoff 0.5s, 1s, 2s…
+              ui.meta.textContent = `Errore transitorio (${err.code||'unknown'}). Retry tra ${delay} ms…`;
+              setTimeout(start, delay);
+            } else {
+              reject(err);
+            }
+          },
+          ()=>{
+            clearInterval(watchdog);
+            resolve(task.snapshot);
           }
-        },
-        (err)=>{
-          clearInterval(watchdog);
-          console.error('Upload error', err);
-          reject(err);
-        },
-        async ()=>{
-          clearInterval(watchdog);
-          if (aborted) return reject(new Error('Upload annullato per timeout'));
-          try{
-            const url = await ref.getDownloadURL();
-            const key = db.ref('/slides/items').push().key;
-            await db.ref(`/slides/items/${key}`).set({
-              id: key, name: f.name, path, url, createdAt: Date.now()
-            });
-            done++;
-            upStatus.textContent = `Upload in corso… (${done}/${files.length})`;
-            resolve();
-          }catch(e){
-            reject(e);
-          }
-        }
-      );
+        );
+      };
+
+      start();
     });
   }
 
-  input.value = '';
-  upStatus.textContent = 'Upload completato ✔';
-}
+  // Mostra lista
+  function renderList(map){
+    grid.innerHTML = '';
+    const ids = Object.keys(map);
+    if (!ids.length){ listStatus.textContent = 'Nessuna immagine caricata.'; return; }
+    listStatus.textContent = `${ids.length} immagini.`;
+    ids.sort((a,b)=> map[b].createdAt - map[a].createdAt);
+    ids.forEach(id => {
+      const it = map[id];
+      const card = document.createElement('div');
+      card.className = 'item';
+      card.innerHTML = `
+        <img class="thumb" src="${it.url}" alt="${it.name}">
+        <div class="name">${it.name}</div>
+        <div class="row">
+          <button class="btn btn-accent" data-act="show" data-id="${id}" type="button">Mostra</button>
+          <button class="btn" data-act="hide" data-id="${id}" type="button">Nascondi</button>
+          <button class="btn btn-danger" data-act="del"  data-id="${id}" type="button">Elimina</button>
+        </div>
+      `;
+      card.querySelector('[data-act="show"]').onclick = ()=> showSlide(id);
+      card.querySelector('[data-act="hide"]').onclick = hideSlide;
+      card.querySelector('[data-act="del"]').onclick  = ()=> deleteSlide(id);
+      grid.appendChild(card);
+    });
+  }
 
+  // Comandi overlay
+  async function showSlide(id){
+    const it = items[id]; if (!it) return;
+    await set(dbRef(db, '/slides/current'), { id, url: it.url, name: it.name, nonce: Date.now() });
+  }
+  async function hideSlide(){
+    await set(dbRef(db, '/slides/current'), null);
+  }
+  async function deleteSlide(id){
+    const it = items[id]; if (!it) return;
+    if (!confirm(`Eliminare "${it.name}"?`)) return;
+    try{
+      await deleteObject(stRef(st, it.path));
+    }catch(e){
+      console.warn('Storage delete warning:', e?.message||e);
+    }
+    await set(dbRef(db, `/slides/items/${id}`), null);
+  }
 
-// Mostra lista
-function renderList(map){
-  grid.innerHTML = '';
-  const ids = Object.keys(map);
-  if (!ids.length){ listStatus.textContent = 'Nessuna immagine caricata.'; return; }
-  listStatus.textContent = `${ids.length} immagini.`;
-  ids.sort((a,b)=> map[b].createdAt - map[a].createdAt);
-  ids.forEach(id => {
-    const it = map[id];
-    const card = document.createElement('div');
-    card.className = 'item';
-    card.innerHTML = `
-      <img class="thumb" src="${it.url}" alt="${it.name}">
-      <div class="name">${it.name}</div>
-      <div class="row">
-        <button class="btn btn-accent" data-act="show" data-id="${id}" type="button">Mostra</button>
-        <button class="btn" data-act="hide" data-id="${id}" type="button">Nascondi</button>
-        <button class="btn btn-danger" data-act="del"  data-id="${id}" type="button">Elimina</button>
-      </div>
-    `;
-    card.querySelector('[data-act="show"]').onclick = ()=> showSlide(id);
-    card.querySelector('[data-act="hide"]').onclick = hideSlide;
-    card.querySelector('[data-act="del"]').onclick  = ()=> deleteSlide(id);
-    grid.appendChild(card);
-  });
-}
-
-// Comandi overlay
-async function showSlide(id){
-  const it = items[id]; if (!it) return;
-  await db.ref('/slides/current').set({ id, url: it.url, name: it.name, nonce: Date.now() });
-}
-async function hideSlide(){
-  await db.ref('/slides/current').set(null);
-}
-async function deleteSlide(id){
-  const it = items[id]; if (!it) return;
-  if (!confirm(`Eliminare "${it.name}"?`)) return;
-  try{
-    await storage.ref().child(it.path).delete();
-  }catch(e){ console.warn('Storage delete warning:', e); }
-  await db.ref(`/slides/items/${id}`).set(null);
-}
-
-// Opacità globale (0-100) → 0..1
-async function saveOpacity(){
-  const v = Math.max(0, Math.min(100, parseInt(range.value || '100',10)));
-  await db.ref('/slides/opacity').set(v/100);
-  opStatus.textContent = `Opacità impostata a ${v}%`;
-}
+  // Opacità globale (0-100) → 0..1
+  async function saveOpacity(){
+    const v = Math.max(0, Math.min(100, parseInt(range.value || '100',10)));
+    await set(dbRef(db, '/slides/opacity'), v/100);
+    opStatus.textContent = `Opacità impostata a ${v}%`;
+    setTimeout(()=> opStatus.textContent = '', 1500);
+  }
 </script>
 </body>
 </html>
