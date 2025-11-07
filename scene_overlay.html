@@ -3,88 +3,97 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Slides Overlay — Fullscreen Show/Hide</title>
+<title>GitHub Slides — Overlay</title>
 <style>
   html,body{margin:0;padding:0;overflow:hidden;background:transparent}
   .stage{position:fixed;inset:0;display:grid;place-items:center;pointer-events:none}
-  .frame{
-    position:relative; width:100vw; height:100vh;
-    display:grid; place-items:center;
-  }
-  img.slide{
+  .frame{position:relative;width:100vw;height:100vh;display:grid;place-items:center}
+  .media{
     max-width:100vw; max-height:100vh;
     width:auto; height:auto; object-fit:contain;
     opacity:0; transition:opacity 220ms ease-in-out;
-    box-shadow:0 10px 30px rgba(0,0,0,.35);
-    border-radius:12px;
-    pointer-events:none;
+    border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,.35);
   }
   .visible{ opacity:var(--op,1); }
-  /* diagnostic (opzionale) */
-  #diag{position:fixed; top:8px; left:8px; padding:6px 10px; background:rgba(0,0,0,.45); color:#fff; font:12px system-ui; border-radius:8px; pointer-events:none}
+  #diag{position:fixed;top:8px;left:8px;padding:6px 10px;background:rgba(0,0,0,.45);color:#fff;font:12px system-ui;border-radius:8px;pointer-events:none}
 </style>
 </head>
 <body>
-  <div id="diag">slides: <span id="dState">idle</span> · opacity: <span id="dOpacity">1.00</span></div>
+  <div id="diag">state: <span id="dState">idle</span> · opacity: <span id="dOpacity">1.00</span></div>
   <div class="stage">
-    <div class="frame">
-      <img id="slide" class="slide" alt="">
-    </div>
+    <div class="frame" id="holder"></div>
   </div>
 
-  <!-- Firebase compat SDK -->
-  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
-  <script>
-'use strict';
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js";
+    import { getDatabase, ref as dbRef, onValue } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-database.js";
 
-// === Stesso progetto del controller ===
-const firebaseConfig = {
-  apiKey: "AIzaSyBkce58GlbHRRmHSNyGQyDiqmxuuNll2Ys",
-  authDomain: "scene1-45a13.firebaseapp.com",
-  databaseURL: "https://scene1-45a13-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: "scene1-45a13",
-  storageBucket: "scene1-45a13.appspot.com",
-  messagingSenderId: "15156197967",
-  appId: "1:15156197967:web:2b9caac05000641352083a"
-};
-firebase.initializeApp(firebaseConfig);
-const db = firebase.database();
+    /* ===== STESSO PROGETTO DEL CONTROLLER ===== */
+    const firebaseConfig = {
+      apiKey: "REPLACE_ME",
+      authDomain: "REPLACE_ME.firebaseapp.com",
+      projectId: "REPLACE_ME",
+      storageBucket: "REPLACE_ME.appspot.com",
+      messagingSenderId: "REPLACE_ME",
+      appId: "REPLACE_ME",
+      databaseURL: "https://REPLACE_ME-default-rtdb.europe-west1.firebasedatabase.app"
+    };
+    const app = initializeApp(firebaseConfig);
+    const db  = getDatabase(app);
 
-const img = document.getElementById('slide');
-const dState = document.getElementById('dState');
-const dOpacity = document.getElementById('dOpacity');
+    const holder   = document.getElementById('holder');
+    const dState   = document.getElementById('dState');
+    const dOpacity = document.getElementById('dOpacity');
 
-// Opacità globale
-let globalOpacity = 1;
-db.ref('/slides/opacity').on('value', snap => {
-  const v = Number(snap.val());
-  globalOpacity = isFinite(v) ? Math.min(1, Math.max(0, v)) : 1;
-  document.documentElement.style.setProperty('--op', String(globalOpacity));
-  dOpacity.textContent = globalOpacity.toFixed(2);
-});
+    let globalOpacity = 1;
+    onValue(dbRef(db, '/ghslides/opacity'), snap => {
+      const v = Number(snap.val());
+      globalOpacity = isFinite(v) ? Math.min(1, Math.max(0, v)) : 1;
+      document.documentElement.style.setProperty('--op', String(globalOpacity));
+      dOpacity.textContent = globalOpacity.toFixed(2);
+    });
 
-// Slide corrente
-db.ref('/slides/current').on('value', snap => {
-  const v = snap.val();
-  if (!v || !v.url){
-    dState.textContent = 'hidden';
-    img.classList.remove('visible');
-    // attendo la transizione per pulire src (evita flicker)
-    setTimeout(()=>{ img.removeAttribute('src'); img.alt=''; }, 230);
-    return;
-  }
-  dState.textContent = 'showing';
-  // carico nuova immagine, poi visibilità
-  const url = v.url + (v.url.includes('?') ? '&' : '?') + 't=' + (v.nonce || Date.now()); // cache-bust
-  img.classList.remove('visible');
-  // se l’immagine è già in cache, l’evento load può non scattare: forzo step
-  const applyVisible = ()=>requestAnimationFrame(()=> img.classList.add('visible'));
-  img.onload = applyVisible;
-  img.onerror = ()=>{ dState.textContent = 'error'; img.classList.remove('visible'); };
-  img.src = url;
-  img.alt = v.name || '';
-});
+    onValue(dbRef(db, '/ghslides/current'), snap => {
+      const v = snap.val();
+      if (!v || !v.url){
+        clearMedia();
+        dState.textContent = 'hidden';
+        return;
+      }
+      dState.textContent = 'showing';
+      showMedia(v);
+    });
+
+    function clearMedia(){
+      while(holder.firstChild) holder.removeChild(holder.firstChild);
+    }
+
+    function showMedia({ url, name, kind, nonce }){
+      clearMedia();
+      const bust = url + (url.includes('?') ? '&' : '?') + 't=' + (nonce || Date.now());
+
+      if (kind === 'video'){
+        const vid = document.createElement('video');
+        vid.className = 'media';
+        vid.src = bust;
+        vid.muted = true; vid.autoplay = true; vid.loop = true; vid.playsInline = true;
+        vid.setAttribute('crossorigin','anonymous');
+        vid.oncanplay = ()=> vid.classList.add('visible');
+        vid.onerror = ()=> dState.textContent = 'error(video)';
+        holder.appendChild(vid);
+        // Safari/iOS fallback: try play() after a tick
+        setTimeout(()=> vid.play().catch(()=>{}), 100);
+      } else {
+        const img = document.createElement('img');
+        img.className = 'media';
+        img.src = bust; img.alt = name || '';
+        img.setAttribute('crossorigin','anonymous');
+        img.onload  = ()=> img.classList.add('visible');
+        img.onerror = ()=> dState.textContent = 'error(image)';
+        holder.appendChild(img);
+      }
+    }
   </script>
 </body>
 </html>
+
