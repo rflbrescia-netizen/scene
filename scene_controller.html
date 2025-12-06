@@ -14,7 +14,12 @@
   .card h2{margin:0 0 8px;font-size:16px}
   .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
   label{font-size:12px;color:var(--muted);display:block;margin-bottom:4px}
-  input[type="text"]{padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.08);background:#0b111b;color:#e9eef9}
+  input[type="text"],
+  input[type="email"],
+  input[type="password"]{
+    padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.08);
+    background:#0b111b;color:#e9eef9
+  }
   .btn{padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.08);background:#0d1624;color:#e9eef9;cursor:pointer}
   .btn:hover{filter:brightness(1.08)}
   .btn-accent{background:var(--accent);color:#001018;font-weight:800}
@@ -26,13 +31,46 @@
   .thumb{width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:8px;background:#0a0f18}
   .name{font-weight:700}
   .badge{font-size:11px;padding:2px 6px;border-radius:6px;background:#0b111b;color:#9fb0cc;width:max-content}
-  @media (max-width: 720px){ .btn{padding:12px 14px} input[type="text"]{width:100%} .row input{flex:1} }
+  @media (max-width: 720px){
+    .btn{padding:12px 14px}
+    input[type="text"],
+    input[type="email"],
+    input[type="password"]{width:100%}
+    .row input{flex:1}
+  }
 </style>
 </head>
 <body>
 <header><h1>GitHub Slides — Controller</h1></header>
 
-<div class="wrap">
+<!-- PANNELLO LOGIN -->
+<section id="login-panel" class="card" style="max-width:420px;margin:16px auto;">
+  <h2>Login Slides Controller</h2>
+  <p class="tiny">
+    Inserisci email e password dell’account autorizzato su Firebase per controllare le slide.
+  </p>
+  <form id="login-form" autocomplete="on">
+    <div class="row" style="flex-direction:column;align-items:stretch;">
+      <div>
+        <label>Email</label>
+        <input type="email" id="login-email" required placeholder="controller@example.com">
+      </div>
+    </div>
+    <div class="row" style="flex-direction:column;align-items:stretch;">
+      <div>
+        <label>Password</label>
+        <input type="password" id="login-password" required placeholder="••••••••">
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px;justify-content:space-between;">
+      <button type="submit" class="btn btn-accent" style="flex:1;">Entra</button>
+    </div>
+    <p id="login-error" class="tiny" style="color:var(--danger);margin-top:8px;"></p>
+  </form>
+</section>
+
+<!-- CONTROLLER: visibile solo dopo login -->
+<div class="wrap" id="controller-panel" style="display:none;">
 
   <section class="card">
     <h2>Sorgente GitHub</h2>
@@ -64,6 +102,7 @@
     <div class="row">
       <button class="btn" id="btnHide" type="button">Nascondi</button>
       <span class="tiny">nasconde la slide corrente</span>
+      <button class="btn btn-danger" id="btnLogout" type="button" style="margin-left:auto;">Logout</button>
     </div>
   </section>
 
@@ -109,153 +148,221 @@
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js";
   import { getDatabase, ref as dbRef, set, onValue } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-database.js";
+  import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-auth.js";
 
-  /* ===== CONFIGURA QUI IL TUO PROGETTO (Realtime DB) =====
-     Usa la URL REGIONALE (es: europe-west1.firebasedatabase.app) */
-const firebaseConfig = {
-  apiKey: "AIzaSyBkce58GlbHRRmHSNyGQyDiqmxuuNll2Ys",
-  authDomain: "scene1-45a13.firebaseapp.com",
-  databaseURL: "https://scene1-45a13-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: "scene1-45a13",
-  storageBucket: "scene1-45a13.appspot.com",
-  messagingSenderId: "15156197967",
-  appId: "1:15156197967:web:2b9caac05000641352083a"
-};
+  /* ===== CONFIG FIREBASE ===== */
+  const firebaseConfig = {
+    apiKey: "AIzaSyBkce58GlbHRRmHSNyGQyDiqmxuuNll2Ys",
+    authDomain: "scene1-45a13.firebaseapp.com",
+    databaseURL: "https://scene1-45a13-default-rtdb.europe-west1.firebasedatabase.app",
+    projectId: "scene1-45a13",
+    storageBucket: "scene1-45a13.appspot.com",
+    messagingSenderId: "15156197967",
+    appId: "1:15156197967:web:2b9caac05000641352083a"
+  };
+
   const app = initializeApp(firebaseConfig);
   const db  = getDatabase(app);
+  const auth = getAuth(app);
 
-  // UI refs
   const $ = s => document.querySelector(s);
-  const grid = $('#grid');
-  const listStatus = $('#listStatus');
-  const scanStatus = $('#scanStatus');
-  const opStatus = $('#opStatus');
-  const range = $('#opacityRange'); const rangeVal = $('#opacityVal');
-  range.addEventListener('input', ()=> rangeVal.textContent = range.value + '%');
 
-  // Bind
-  document.getElementById('btnScan').addEventListener('click', scanRepo);
-  document.getElementById('btnHide').addEventListener('click', hideSlide);
-  document.getElementById('btnSaveOpacity').addEventListener('click', saveOpacity);
+  // Pannelli
+  const loginPanel      = $('#login-panel');
+  const controllerPanel = $('#controller-panel');
 
-  document.getElementById('btnSoundOn').addEventListener('click', async ()=>{
-    await set(dbRef(db, '/ghslides/sound'), true);
-    document.getElementById('sndStatus').textContent = 'Audio: ON (in browser standard richiede tap sull’overlay la prima volta)';
-  });
-  document.getElementById('btnSoundOff').addEventListener('click', async ()=>{
-    await set(dbRef(db, '/ghslides/sound'), false);
-    document.getElementById('sndStatus').textContent = 'Audio: OFF';
-  });
+  // Login DOM
+  const loginForm     = $('#login-form');
+  const loginEmail    = $('#login-email');
+  const loginPassword = $('#login-password');
+  const loginError    = $('#login-error');
+  const btnLogout     = $('#btnLogout');
 
-  document.getElementById('btnForceOn').addEventListener('click', async ()=>{
-    await set(dbRef(db, '/ghslides/forceAudio'), true);
-    document.getElementById('forceStatus').textContent = 'Forza audio: ON';
-  });
-  document.getElementById('btnForceOff').addEventListener('click', async ()=>{
-    await set(dbRef(db, '/ghslides/forceAudio'), false);
-    document.getElementById('forceStatus').textContent = 'Forza audio: OFF';
-  });
-
-  // Feedback: cosa è attivo
-  onValue(dbRef(db, '/ghslides/current'), snap => {
-    const v = snap.val();
-    if (v && v.url) {
-      scanStatus.textContent = 'Mostrando: ' + (v.name || v.url);
-    } else {
-      scanStatus.textContent = 'Nessuna slide attiva.';
-    }
-  });
-
-  // Scansiona repo GitHub e popola la galleria
-  async function scanRepo(){
-    const owner = $('#ghOwner').value.trim();
-    const repo  = $('#ghRepo').value.trim();
-    const path  = $('#ghPath').value.trim().replace(/^\/+|\/+$/g,'');
-    const token = $('#ghToken').value.trim();
-    if(!owner || !repo){ alert('Inserisci owner e repo.'); return; }
-
-    const base = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents`;
-    const api  = path ? `${base}/${encodeURIComponent(path)}` : base;
-
-    scanStatus.textContent = 'Scansione in corso…';
-    const headers = { 'Accept': 'application/vnd.github+json' };
-    if(token) headers['Authorization'] = 'Bearer ' + token;
-
-    try{
-      const res = await fetch(api, { cache:'no-store', headers });
-      if(!res.ok){
-        const t = await res.text();
-        throw new Error(`GitHub HTTP ${res.status}: ${t.slice(0,160)}`);
+  // Login submit
+  if (loginForm) {
+    loginForm.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      loginError.textContent = '';
+      try{
+        await signInWithEmailAndPassword(
+          auth,
+          (loginEmail.value || '').trim(),
+          loginPassword.value
+        );
+        // onAuthStateChanged farà il resto
+      }catch(err){
+        console.error(err);
+        loginError.textContent = 'Login non riuscito: ' + (err.code || err.message || 'controlla credenziali');
       }
-      const items = await res.json();
-      const mediaExt = ['.jpg','.jpeg','.png','.webp','.gif','.mp4','.webm'];
-      const files = (Array.isArray(items) ? items : []).filter(x=>{
-        const name = (x?.name || '').toLowerCase();
-        return x?.type === 'file' && mediaExt.some(ext => name.endsWith(ext));
-      });
+    });
+  }
 
-      if(!files.length){ grid.innerHTML=''; listStatus.textContent='Nessun file supportato trovato.'; scanStatus.textContent=''; return; }
+  // Logout
+  if (btnLogout) {
+    btnLogout.addEventListener('click', ()=> signOut(auth));
+  }
 
-      const normalized = files.map(f=>{
-        const url = f.download_url || toRaw(owner, repo, path, f.name);
-        const lower = f.name.toLowerCase();
-        const kind = (lower.endsWith('.mp4') || lower.endsWith('.webm')) ? 'video' : 'image';
-        return { id: f.sha || f.path || f.name, name: f.name, url, kind };
-      });
-      renderList(normalized);
-      listStatus.textContent = `${normalized.length} file.`;
-      scanStatus.textContent = 'Scansione OK.';
-    }catch(e){
-      console.error(e);
-      scanStatus.textContent = 'Errore: ' + (e?.message || e);
-      alert('Errore scansione: ' + (e?.message || e));
+  // Inizializza controller una sola volta dopo login
+  let controllerInitialized = false;
+
+  onAuthStateChanged(auth, user => {
+    if (user) {
+      loginPanel.style.display = 'none';
+      controllerPanel.style.display = 'grid';
+      if (!controllerInitialized) {
+        controllerInitialized = true;
+        initController(user);
+      }
+    } else {
+      controllerPanel.style.display = 'none';
+      loginPanel.style.display = 'block';
     }
-  }
+  });
 
-  function renderList(items){
-    grid.innerHTML = '';
-    items.forEach(it=>{
-      const card = document.createElement('div');
-      card.className = 'item';
-      const preview = (it.kind === 'image')
-        ? `<img class="thumb" src="${it.url}" alt="${it.name}" loading="lazy">`
-        : `<video class="thumb" src="${it.url}" muted playsinline></video>`;
-      card.innerHTML = `
-        ${preview}
-        <div class="name">${it.name}</div>
-        <span class="badge">${it.kind.toUpperCase()}</span>
-        <div class="row">
-          <button class="btn btn-accent" type="button">Mostra</button>
-          <button class="btn" type="button">Nascondi</button>
-        </div>
-      `;
-      const [btnShow, btnHide] = card.querySelectorAll('button');
-      btnShow.onclick = ()=> showSlide(it);
-      btnHide.onclick = ()=> hideSlide();
-      grid.appendChild(card);
+  /* ===== CONTROLLER LOGIC ===== */
+  function initController(user){
+
+    const grid       = $('#grid');
+    const listStatus = $('#listStatus');
+    const scanStatus = $('#scanStatus');
+    const opStatus   = $('#opStatus');
+    const range      = $('#opacityRange');
+    const rangeVal   = $('#opacityVal');
+
+    range.addEventListener('input', ()=> rangeVal.textContent = range.value + '%');
+
+    // Bind bottoni
+    $('#btnScan').addEventListener('click', scanRepo);
+    $('#btnHide').addEventListener('click', hideSlide);
+    $('#btnSaveOpacity').addEventListener('click', saveOpacity);
+
+    $('#btnSoundOn').addEventListener('click', async ()=>{
+      await set(dbRef(db, '/ghslides/sound'), true);
+      $('#sndStatus').textContent = 'Audio: ON (in browser standard richiede tap sull’overlay la prima volta)';
     });
-  }
-
-  // Comandi overlay (DB only)
-  async function showSlide(it){
-    await set(dbRef(db, '/ghslides/current'), {
-      id: it.id, url: it.url, name: it.name, kind: it.kind, nonce: Date.now()
+    $('#btnSoundOff').addEventListener('click', async ()=>{
+      await set(dbRef(db, '/ghslides/sound'), false);
+      $('#sndStatus').textContent = 'Audio: OFF';
     });
-  }
-  async function hideSlide(){
-    await set(dbRef(db, '/ghslides/current'), null);
-  }
-  async function saveOpacity(){
-    const v = Math.max(0, Math.min(100, parseInt(range.value || '100',10)));
-    await set(dbRef(db, '/ghslides/opacity'), v/100);
-    opStatus.textContent = `Opacità impostata a ${v}%`;
-    setTimeout(()=> opStatus.textContent='', 1500);
-  }
 
-  function toRaw(owner, repo, path, name){
-    const p = path ? (path.replace(/^\/+|\/+$/g,'') + '/') : '';
-    return `https://raw.githubusercontent.com/${owner}/${repo}/HEAD/${p}${name}`;
-  }
+    $('#btnForceOn').addEventListener('click', async ()=>{
+      await set(dbRef(db, '/ghslides/forceAudio'), true);
+      $('#forceStatus').textContent = 'Forza audio: ON';
+    });
+    $('#btnForceOff').addEventListener('click', async ()=>{
+      await set(dbRef(db, '/ghslides/forceAudio'), false);
+      $('#forceStatus').textContent = 'Forza audio: OFF';
+    });
+
+    // Feedback slide corrente
+    onValue(dbRef(db, '/ghslides/current'), snap => {
+      const v = snap.val();
+      if (v && v.url) {
+        scanStatus.textContent = 'Mostrando: ' + (v.name || v.url);
+      } else {
+        scanStatus.textContent = 'Nessuna slide attiva.';
+      }
+    });
+
+    // Scansiona repo GitHub e popola galleria
+    async function scanRepo(){
+      const owner = $('#ghOwner').value.trim();
+      const repo  = $('#ghRepo').value.trim();
+      const path  = $('#ghPath').value.trim().replace(/^\/+|\/+$/g,'');
+      const token = $('#ghToken').value.trim();
+      if(!owner || !repo){ alert('Inserisci owner e repo.'); return; }
+
+      const base = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents`;
+      const api  = path ? `${base}/${encodeURIComponent(path)}` : base;
+
+      scanStatus.textContent = 'Scansione in corso…';
+      const headers = { 'Accept': 'application/vnd.github+json' };
+      if(token) headers['Authorization'] = 'Bearer ' + token;
+
+      try{
+        const res = await fetch(api, { cache:'no-store', headers });
+        if(!res.ok){
+          const t = await res.text();
+          throw new Error(`GitHub HTTP ${res.status}: ${t.slice(0,160)}`);
+        }
+        const items = await res.json();
+        const mediaExt = ['.jpg','.jpeg','.png','.webp','.gif','.mp4','.webm'];
+        const files = (Array.isArray(items) ? items : []).filter(x=>{
+          const name = (x?.name || '').toLowerCase();
+          return x?.type === 'file' && mediaExt.some(ext => name.endsWith(ext));
+        });
+
+        if(!files.length){
+          grid.innerHTML='';
+          listStatus.textContent='Nessun file supportato trovato.';
+          scanStatus.textContent='';
+          return;
+        }
+
+        const normalized = files.map(f=>{
+          const url = f.download_url || toRaw(owner, repo, path, f.name);
+          const lower = f.name.toLowerCase();
+          const kind = (lower.endsWith('.mp4') || lower.endsWith('.webm')) ? 'video' : 'image';
+          return { id: f.sha || f.path || f.name, name: f.name, url, kind };
+        });
+
+        renderList(normalized);
+        listStatus.textContent = `${normalized.length} file.`;
+        scanStatus.textContent = 'Scansione OK.';
+      }catch(e){
+        console.error(e);
+        scanStatus.textContent = 'Errore: ' + (e?.message || e);
+        alert('Errore scansione: ' + (e?.message || e));
+      }
+    }
+
+    function renderList(items){
+      grid.innerHTML = '';
+      items.forEach(it=>{
+        const card = document.createElement('div');
+        card.className = 'item';
+        const preview = (it.kind === 'image')
+          ? `<img class="thumb" src="${it.url}" alt="${it.name}" loading="lazy">`
+          : `<video class="thumb" src="${it.url}" muted playsinline></video>`;
+        card.innerHTML = `
+          ${preview}
+          <div class="name">${it.name}</div>
+          <span class="badge">${it.kind.toUpperCase()}</span>
+          <div class="row">
+            <button class="btn btn-accent" type="button">Mostra</button>
+            <button class="btn" type="button">Nascondi</button>
+          </div>
+        `;
+        const [btnShow, btnHide] = card.querySelectorAll('button');
+        btnShow.onclick = ()=> showSlide(it);
+        btnHide.onclick = ()=> hideSlide();
+        grid.appendChild(card);
+      });
+    }
+
+    async function showSlide(it){
+      await set(dbRef(db, '/ghslides/current'), {
+        id: it.id, url: it.url, name: it.name, kind: it.kind, nonce: Date.now()
+      });
+    }
+
+    async function hideSlide(){
+      await set(dbRef(db, '/ghslides/current'), null);
+    }
+
+    async function saveOpacity(){
+      const v = Math.max(0, Math.min(100, parseInt(range.value || '100',10)));
+      await set(dbRef(db, '/ghslides/opacity'), v/100);
+      opStatus.textContent = `Opacità impostata a ${v}%`;
+      setTimeout(()=> opStatus.textContent='', 1500);
+    }
+
+    function toRaw(owner, repo, path, name){
+      const p = path ? (path.replace(/^\/+|\/+$/g,'') + '/') : '';
+      return `https://raw.githubusercontent.com/${owner}/${repo}/HEAD/${p}${name}`;
+    }
+
+  } // fine initController
 </script>
 </body>
 </html>
